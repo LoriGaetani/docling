@@ -1,0 +1,21 @@
+[
+  {
+    "id": 0,
+    "content": "> Docling OCR engine: **rapidocr** (enabled: True)  \nFile: `dataset/IMG_20251202_175113847.jpg`  \n---  \n(Ingegneria Del Cinema E Dei Mezzi Di Comunicazione-Torino) 01MNVPC-Computer Grafica",
+    "metadata": {}
+  },
+  {
+    "id": 1,
+    "content": "## 1 Luglio2025  \nvisualizzarne i dettagli.  \ncome parte dell'esercizio.  \nCosa devi costruire  \nDevi:  \n\"Dashboard dei preferiti\" - stato locale + persistenza dei preferiti Scegliere una delle tre funzionalita seguenti da implementare: O O  \nQuali componenti o pattern di gestione dello stato hai considerato e utilizzato Documentare in 2-3 frasi:  \n2  \nNavigazione con React Router  \nComponenti Material UI  \nO  \n3. Implementare la funzionalita scelta con:  \nUso dei dati contenuti nel file JsON simile a quello fornito Gestione dello stato O  \nO  \nPoiche l'applicazione e destinata ad essere usata in una pluralita di contesti, abbi cura di gestire una corretta impaginazione su cellulari, tablet e pc desktop.  \n20%  \n30%  \n10%  \nImplementazione della funzionalita scelta  \nArchitettura chiara e ragionata",
+    "metadata": {
+      "H2": "1 Luglio2025"
+    }
+  },
+  {
+    "id": 2,
+    "content": "## Criteri di valutazione  \n10%  \n10%  \nUso di Mul e chiarezza visiva  \n10%  \n10%  \nDocumentazione delle decisioni Organizzazione del codice",
+    "metadata": {
+      "H2": "Criteri di valutazione"
+    }
+  }
+]

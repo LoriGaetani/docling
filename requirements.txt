@@ -1,4 +1,11 @@
+torch
+docling-core
 docling
 pandas
 tabulate
 Pillow
+langchain-core
+langchain-text-splitters
+easyocr
+onnxruntime
+openai
