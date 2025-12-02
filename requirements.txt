@@ -1,0 +1,4 @@
+docling
+pandas
+tabulate
+Pillow
