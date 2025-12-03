@@ -11,15 +11,15 @@ import pandas as pd
 from PIL import Image
 
 from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions, EasyOcrOptions
 from docling.document_converter import (
     DocumentConverter,
     PdfFormatOption,
     ImageFormatOption,
 )
 from docling_core.types.doc import DocItemLabel
-from chunking import generate_markdown_chunks, generate_docling_chunks, generate_langchain_chunks
-
+from chunking import  generate_docling_chunks, generate_langchain_chunks, \
+    generate_markdown_chunks_from_string
 
 
 # =========================================================
@@ -62,108 +62,7 @@ def should_enable_ocr_for_file(file_path: Union[str, Path]) -> bool:
 
 
 # =========================================================
-#  Header/footer cleaning helpers (heuristic)
-# =========================================================
-
-def _normalize_line(line: str) -> str:
-    return " ".join(line.split()).strip()
-
-
-def _extract_block(lines: List[str], start_idx: int, max_block_size: int = 8) -> Tuple[str, ...]:
-    block: List[str] = []
-    i = start_idx
-    while i < len(lines) and len(block) < max_block_size:
-        norm = _normalize_line(lines[i])
-        if norm == "":
-            break
-        block.append(norm)
-        i += 1
-    return tuple(block)
-
-
-def _find_repeated_header_block(
-    lines: List[str],
-    min_block_size: int = 3,
-    max_block_size: int = 8,
-    min_repetitions: int = 3,
-) -> Optional[Tuple[str, ...]]:
-    blocks_counter: Counter[Tuple[str, ...]] = Counter()
-    for start_idx in range(len(lines)):
-        block = _extract_block(lines, start_idx, max_block_size=max_block_size)
-        if len(block) >= min_block_size:
-            blocks_counter[block] += 1
-
-    if not blocks_counter:
-        return None
-
-    block, count = blocks_counter.most_common(1)[0]
-    if count >= min_repetitions:
-        return block
-    return None
-
-
-def _find_repeated_footer_lines(
-    lines: List[str], min_repetitions: int = 3
-) -> Set[str]:
-    counter: Counter[str] = Counter()
-    for line in lines:
-        norm = _normalize_line(line)
-        if norm.isdigit():
-            counter[norm] += 1
-
-    return {v for v, c in counter.items() if c >= min_repetitions}
-
-
-def _matches_block_at(lines: List[str], start_idx: int, block: Tuple[str, ...]) -> bool:
-    if start_idx + len(block) > len(lines):
-        return False
-    for offset, expected in enumerate(block):
-        if _normalize_line(lines[start_idx + offset]) != expected:
-            return False
-    return True
-
-
-def clean_headers_footers(text: str) -> str:
-    lines = text.splitlines()
-
-    header_block = _find_repeated_header_block(lines)
-    footer_lines_norm = _find_repeated_footer_lines(lines)
-
-    print("=== HEADER/FOOTER DETECTION (heuristic) ===")
-    if header_block:
-        print("\nDetected HEADER block:")
-        for l in header_block:
-            print("  ", l)
-    else:
-        print("\nNo repeated header block found.")
-
-    if footer_lines_norm:
-        print("\nDetected FOOTER numeric lines:")
-        for f in footer_lines_norm:
-            print("  ", f)
-    else:
-        print("\nNo repeated numeric footers found.")
-    print("===========================================\n")
-
-    cleaned_lines: List[str] = []
-    i = 0
-    while i < len(lines):
-        if header_block and _matches_block_at(lines, i, header_block):
-            i += len(header_block)
-            continue
-
-        if _normalize_line(lines[i]) in footer_lines_norm:
-            i += 1
-            continue
-
-        cleaned_lines.append(lines[i])
-        i += 1
-
-    return "\n".join(cleaned_lines)
-
-
-# =========================================================
-#  Table merge
+#  Table merge Logic
 # =========================================================
 
 def merge_tables(doc):
@@ -190,11 +89,11 @@ def merge_tables(doc):
                 print(f"  Merged table {i} into previous table (matching headers).")
             else:
                 is_range_index = (
-                    isinstance(next_df.columns, pd.RangeIndex)
-                    or (
-                        pd.api.types.is_numeric_dtype(next_df.columns)
-                        and list(next_df.columns) == list(range(len(next_df.columns)))
-                    )
+                        isinstance(next_df.columns, pd.RangeIndex)
+                        or (
+                                pd.api.types.is_numeric_dtype(next_df.columns)
+                                and list(next_df.columns) == list(range(len(next_df.columns)))
+                        )
                 )
 
                 if is_range_index:
@@ -220,6 +119,9 @@ def merge_tables(doc):
 
 
 def generate_merged_markdown(doc, md_text, merged_groups):
+    """
+    Sostituisce le tabelle nel markdown generato con le versioni mergiate.
+    """
     print("Post-processing Markdown to merge tables...")
 
     for group in merged_groups:
@@ -232,6 +134,7 @@ def generate_merged_markdown(doc, md_text, merged_groups):
 
         first_idx = indices[0]
         first_table_item = doc.tables[first_idx]
+        # Nota: Qui usiamo l'export standard per trovare la stringa da sostituire
         first_table_md_snippet = first_table_item.export_to_markdown(doc=doc)
 
         if first_table_md_snippet in md_text:
@@ -245,28 +148,18 @@ def generate_merged_markdown(doc, md_text, merged_groups):
             if table_md_snippet in md_text:
                 md_text = md_text.replace(table_md_snippet, "\n<!-- merged table part -->\n", 1)
             else:
-                print(f"  Warning: Could not find original text for table {idx} in Markdown.")
+                pass
 
     return md_text
 
 
 # =========================================================
-#  Docling OCR engine (EasyOCR default, RapidOCR su flag)
+#  Docling Converter Setup
 # =========================================================
 
-try:
-    from docling.datamodel.pipeline_options import (
-        EasyOcrOptions,
-        RapidOcrOptions,
-    )
-except ImportError:
-    EasyOcrOptions = None
-    RapidOcrOptions = None
-
-
 def build_docling_converter(
-    file_path: str,
-    use_rapidocr: bool,
+        file_path: str,
+        use_rapidocr: bool,
 ) -> tuple[DocumentConverter, bool, str]:
     ocr_enabled = should_enable_ocr_for_file(file_path)
     print(f"Automatic OCR decision: {'ENABLED' if ocr_enabled else 'DISABLED'} for this file.")
@@ -321,123 +214,169 @@ def build_docling_converter(
 
 
 # =========================================================
-#  Core parsing Docling (PDF / immagini) -> run_dir
+#  MAIN PARSING FUNCTION
 # =========================================================
 
 def run_docling_parsing(
-    file_path: str,
-    run_dir: Path,
-    use_rapidocr: bool = False,
+        file_path: str,
+        run_dir: Path,
+        use_rapidocr: bool = False,
 ) -> tuple[bool, str, str]:
     """
-    - esegue Docling
-    - salva output.json, output.md, chunks.json, immagini
-    - in cima a output.md scrive quale OCR Docling ha usato
+    Esegue la pipeline Docling completa:
+    1. Conversione (PDF/Image -> Docling Doc)
+    2. Export JSON grezzo
+    3. Analisi Merge Tabelle
+    4. Generazione Markdown PULITO (nuova logica iterate_items)
+    5. Salvataggio immagini
+    6. Applicazione Merge Tabelle
+    7. Chunking (chiama modulo esterno)
     """
-    print(f"Processing {file_path} with Docling...")
 
+    print(f"Processing {file_path} with Docling...")
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    # 1. Parsing
     converter, ocr_enabled, ocr_engine_name = build_docling_converter(
         file_path=file_path,
         use_rapidocr=use_rapidocr,
     )
-
     result = converter.convert(file_path)
 
-    # JSON
+    # 2. Export JSON grezzo
     json_path = run_dir / "output.json"
     doc_data = result.document.export_to_dict()
-    with open(json_path, 'w', encoding='utf-8') as f:
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(doc_data, f, indent=2, ensure_ascii=False)
     print(f"Successfully saved parsed data to {json_path}")
 
-    # Merge tabelle
+    # 3. Analisi Merge Tabelle
     merged_groups = merge_tables(result.document)
 
-    # Markdown base
-    try:
-        allowed_labels = {
-            label
-            for label in DocItemLabel
-            if label not in (DocItemLabel.PAGE_HEADER, DocItemLabel.PAGE_FOOTER)
-        }
-        original_md = result.document.export_to_markdown(labels=allowed_labels)
-        print("Exported Markdown without page headers/footers (DocItemLabel filter).")
-    except Exception as e:
-        print(f"Warning: could not filter out headers/footers, falling back to default export: {e}")
-        original_md = result.document.export_to_markdown()
+    # 4. Generazione Markdown Pulito (NUOVA LOGICA iterate_items)
+    # Questa parte sostituisce la logica "clean_headers_footers" euristica vecchia
+    print("Generating Markdown filtering out page headers/footers (New Logic)...")
+    md_parts: List[str] = []
 
-    cleaned_md = clean_headers_footers(original_md)
+    NOISY_HEADER_PATTERNS = [
+        "Comando Provinciale Carabinieri",
+        "Procedimento penale nr.9028/10 RGNR",
+        "Procura della Repubblica di Genova - DDA",
+        # Aggiungi qui altri pattern fissi da rimuovere
+    ]
 
-    # Immagini
+    for item, level in result.document.iterate_items():
+        text = (getattr(item, "text", "") or "").strip()
+
+        # Filtro 1: Label Docling (Header/Footer pagina)
+        if item.label in (DocItemLabel.PAGE_HEADER, DocItemLabel.PAGE_FOOTER):
+            continue
+
+        # Filtro 2: Pattern testuali specifici
+        if any(pat in text for pat in NOISY_HEADER_PATTERNS):
+            continue
+
+        # Costruzione Markdown in base al tipo
+        if item.label == DocItemLabel.SECTION_HEADER:
+            prefix = "#" * (level if level and level > 0 else 1)
+            if text:
+                md_parts.append(f"{prefix} {text}")
+
+        elif item.label == DocItemLabel.LIST_ITEM:
+            if text:
+                md_parts.append(f"* {text}")
+
+        elif item.label == DocItemLabel.TABLE:
+            # Qui inseriamo la versione base della tabella, poi verrà sostituita se fa parte di un merge
+            if hasattr(item, "export_to_markdown"):
+                md_parts.append(item.export_to_markdown())
+            else:
+                if text:
+                    md_parts.append(text)
+
+        elif item.label == DocItemLabel.PICTURE:
+            if text:
+                md_parts.append(text)
+            # Placeholder per dopo
+            md_parts.append("<!-- image -->")
+
+        elif item.label == DocItemLabel.CODE:
+            md_parts.append(f"```\n{text}\n```")
+
+        else:
+            # Testo standard (paragrafi, didascalie, ecc.)
+            if text:
+                md_parts.append(text)
+
+    # Uniamo il tutto
+    cleaned_md = "\n\n".join(md_parts)
+
+    # 5. Salvataggio Immagini
     images_folder = run_dir / "images"
     images_folder.mkdir(parents=True, exist_ok=True)
-    saved_image_paths = []
+    saved_image_paths: List[Union[str, None]] = []
 
-    if hasattr(result.document, 'pictures') and result.document.pictures:
+    if hasattr(result.document, "pictures") and result.document.pictures:
         print(f"Saving {len(result.document.pictures)} pictures to {images_folder}...")
         for i, picture in enumerate(result.document.pictures):
-            if hasattr(picture, 'image') and hasattr(picture.image, 'pil_image') and picture.image.pil_image:
+            if (
+                    hasattr(picture, "image")
+                    and hasattr(picture.image, "pil_image")
+                    and picture.image.pil_image is not None
+            ):
                 try:
                     pil_image = picture.image.pil_image
                     image_format = "png"
-                    if hasattr(picture.image, 'mimetype') and picture.image.mimetype:
-                        image_format = picture.image.mimetype.split('/')[-1].lower()
+                    if hasattr(picture.image, "mimetype") and picture.image.mimetype:
+                        image_format = picture.image.mimetype.split("/")[-1].lower()
 
                     picture_filename = f"picture_{i}.{image_format}"
                     picture_path = images_folder / picture_filename
 
                     pil_image.save(picture_path, format=image_format.upper())
-                    print(f"  Saved {picture_filename}")
                     saved_image_paths.append(str(picture_path.relative_to(run_dir)))
                 except Exception as e:
-                    print(f"  Could not save picture {i} (ID: {getattr(picture, 'id', 'N/A')}): {e}")
+                    print(f"  Could not save picture {i}: {e}")
                     saved_image_paths.append(None)
             else:
-                print(
-                    f"  Picture {i} (ID: {getattr(picture, 'id', 'N/A')}) "
-                    f"has no PIL image data."
-                )
                 saved_image_paths.append(None)
     else:
         print("No pictures found in the document.")
 
-    # Merge tabelle nel markdown
+    # 6. Applicazione del Merge Tabelle sulla stringa pulita
     final_md = generate_merged_markdown(result.document, cleaned_md, merged_groups)
 
-    # Placeholder immagini
+    # 7. Iniezione Link Immagini
     if saved_image_paths:
         print("Injecting image links into Markdown...")
+        placeholder = "<!-- image -->"
         for img_path in saved_image_paths:
-            if img_path and "<!-- image -->" in final_md:
-                final_md = final_md.replace("<!-- image -->", f"![Image]({img_path})", 1)
-            elif img_path:
-                print(f"  Warning: No placeholder found for image {img_path}")
-            else:
-                if "<!-- image -->" in final_md:
-                    final_md = final_md.replace("<!-- image -->", "<!-- image missing -->", 1)
+            if img_path and placeholder in final_md:
+                final_md = final_md.replace(placeholder, f"![Image]({img_path})", 1)
+            elif not img_path and placeholder in final_md:
+                final_md = final_md.replace(placeholder, "", 1)
 
-    # Header con info OCR
-    header = (
+    # 8. Header Finale
+    header_info = (
         f"> Docling OCR engine: **{ocr_engine_name}** "
         f"(enabled: {ocr_enabled})\n\n"
         f"File: `{file_path}`\n\n"
         f"---\n\n"
     )
-    final_md_with_header = header + final_md
+    final_md_with_header = header_info + final_md
 
-    # Salva output.md
+    # 9. Salvataggio Markdown
     md_output_path = run_dir / "output.md"
-    with open(md_output_path, 'w', encoding='utf-8') as f:
+    with open(md_output_path, "w", encoding="utf-8") as f:
         f.write(final_md_with_header)
     print(f"Successfully saved merged markdown to {md_output_path}")
 
-    # Chunking
+    # 10. Chunking (Chiama funzione esterna importata)
     chunks_path = run_dir / "chunks.json"
-    generate_markdown_chunks(result.document, str(chunks_path))
-    #generate_docling_chunks(result.document, str(chunks_path))
-    #generate_langchain_chunks(result.document, str(chunks_path))
-    print(f"Successfully saved chunks to {chunks_path}")
+    generate_markdown_chunks_from_string(
+        markdown_text=final_md_with_header,
+        output_path=chunks_path,
+        source_name="docling_clean_smart"
+    )
 
     return ocr_enabled, ocr_engine_name, final_md_with_header

@@ -1,64 +1,69 @@
 
 from typing import List, Dict, Any, Union
 from pathlib import Path
+import json
 
 import langchain_text_splitters
+from docling_core.transforms.chunker import HybridChunker
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 from transformers import AutoTokenizer
 
 #TODO devo passare tutto il testo al chunker e non un pezzo alla volta
-def generate_markdown_chunks(doc, output_path: Union[str, Path]):
-    print("Exporting to Markdown and chunking...")
+def generate_markdown_chunks_from_string(
+        markdown_text: str,
+        output_path: Union[str, Path],
+        source_name: str = "docling_clean_smart"
+):
+    """
+    Esegue il chunking semantico/strutturale su una stringa Markdown già pulita.
+    Usa LangChain e HuggingFace Tokenizer per rispettare i limiti di token e la struttura del documento.
+    """
+    print("Starting smart chunking with LangChain/Transformers...")
 
-    # 1. Esportazione "Magica" in Markdown
-    # Questo risolve il problema delle tabelle mancanti e delle ripetizioni.
-    full_markdown_text = doc.export_to_markdown()
+    # 1. Setup Tokenizer
+    # Usa un modello piccolo e veloce adatto per RAG multilingua/inglese
+    try:
+        tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+    except Exception as e:
+        print(f"Error loading tokenizer: {e}")
+        return
 
-    # 2. Setup Tokenizer
-    tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
-
-    # 3. Setup Splitter specifico per Markdown
-    # LangChain ha uno splitter che capisce la sintassi Markdown (capisce dove finisce una tabella o un header)
+    # 2. Setup Splitter specifico per Markdown
+    # RecursiveCharacterTextSplitter cerca di splittare prima sui doppi a capo (paragrafi),
+    # poi sui singoli a capo, poi spazi, ecc., preservando la struttura.
     text_splitter = RecursiveCharacterTextSplitter.from_huggingface_tokenizer(
         tokenizer,
-        chunk_size=2048,
-        chunk_overlap=200,
-        separators=["\n\n", "\n", " ", ""],  # Standard separators
-        # Opzionale: se volessi usare from_language per splittare sugli header markdown
-        # ma con i tokenizers di HF a volte è meglio rimanere sul semplice character splitter
+        chunk_size=2048,  # Dimensione target del chunk in token (o caratteri approssimati dal tokenizer)
+        chunk_overlap=200,  # Sovrapposizione per mantenere il contesto tra i chunk
+        separators=["\n\n", "\n", " ", ""],
     )
 
-    # 4. Creazione del Documento Unico
-    # Nota: Con l'export markdown globale, perdiamo la mappatura precisa "frase -> numero pagina",
-    # ma guadagniamo enormemente in qualità del testo.
-    doc_object = Document(page_content=full_markdown_text)
+    # 3. Creazione del Documento LangChain basato sulla stringa pulita
+    doc_object = Document(page_content=markdown_text)
 
-    # 5. Splitting
+    # 4. Splitting
     chunks = text_splitter.split_documents([doc_object])
 
-    # 6. Preparazione Output
+    # 5. Preparazione Output JSON
     chunks_data = []
     for i, chunk in enumerate(chunks):
         chunks_data.append({
             "id": i,
             "text": chunk.page_content,
             "metadata": {
-                "source": "docling_markdown_export",
+                "source": source_name,
                 "chunk_size_chars": len(chunk.page_content)
             }
         })
 
-    # Salvataggio
-    with open(output_path, "w", encoding="utf-8") as f:
+    # 6. Salvataggio su file
+    out_path_obj = Path(output_path)
+    out_path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(out_path_obj, "w", encoding="utf-8") as f:
         json.dump(chunks_data, f, ensure_ascii=False, indent=2)
 
-    print(f"Generati {len(chunks_data)} chunk in Markdown di alta qualità.")
-
-
-from typing import Union, List, Dict, Any
-from pathlib import Path
-import json
-from docling.chunking import HybridChunker
+    print(f"Generati {len(chunks_data)} chunk di alta qualità salvati in {output_path}")
 
 
 def generate_docling_chunks(doc, output_path: Union[str, Path]):
