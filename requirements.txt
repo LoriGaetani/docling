@@ -1,3 +1,4 @@
+transformers
 torch
 docling-core
 docling
@@ -9,3 +10,4 @@ langchain-text-splitters
 easyocr
 onnxruntime
 openai
+langchain

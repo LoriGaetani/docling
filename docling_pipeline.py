@@ -18,13 +18,16 @@ from docling.document_converter import (
     ImageFormatOption,
 )
 from docling_core.types.doc import DocItemLabel
+from chunking import generate_markdown_chunks, generate_docling_chunks, generate_langchain_chunks
 
-from chunking import chunk_markdown
 
 
 # =========================================================
 #  Helpers: document-like detection
 # =========================================================
+
+#TODO test with different document formats
+#TODO test if the ocr is actually needed based on text layer presence
 
 def is_document_like_image(image_path: Union[str, Path]) -> bool:
     image_path = Path(image_path)
@@ -432,7 +435,9 @@ def run_docling_parsing(
 
     # Chunking
     chunks_path = run_dir / "chunks.json"
-    chunk_markdown(final_md_with_header, str(chunks_path))
+    generate_markdown_chunks(result.document, str(chunks_path))
+    #generate_docling_chunks(result.document, str(chunks_path))
+    #generate_langchain_chunks(result.document, str(chunks_path))
     print(f"Successfully saved chunks to {chunks_path}")
 
     return ocr_enabled, ocr_engine_name, final_md_with_header

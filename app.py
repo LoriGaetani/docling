@@ -53,6 +53,8 @@ def parse_document(
                 run_dir=run_dir,
                 model="gpt-4o",  # o altro modello OpenAI che preferisci
             )
+        elif use_rapidocr:
+            print("RAPIDOCR enabled")
         else:
             run_easyocr_report_if_needed(
                 file_path=file_path,
@@ -72,7 +74,7 @@ if __name__ == "__main__":
     # Uso: python main.py [file] [--rapidocr]
     args = sys.argv[1:]
 
-    file_path = "dataset/appunti-a-mano.jpg"
+    file_path = "dataset/file.pdf"
     use_rapidocr = False
     use_openai = False
 
