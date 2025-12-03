@@ -17,11 +17,19 @@ def generate_markdown_chunks_from_string(
     """
     Esegue il chunking semantico/strutturale su una stringa Markdown già pulita.
     Usa LangChain e HuggingFace Tokenizer per rispettare i limiti di token e la struttura del documento.
+
+    In output genera JSON con:
+      - prev: porzione iniziale del chunk usata come overlap col precedente
+      - focus: parte centrale (senza overlap) da usare per l'estrazione
+      - next: porzione finale del chunk usata come overlap col successivo
     """
-    print("Starting smart chunking with LangChain/Transformers...")
+    print("Starting smart chunking with LangChain/Transformers (focus/prev/next)...")
+
+    # Parametri di chunking in token
+    chunk_size_tokens = 2048
+    chunk_overlap_tokens = 200
 
     # 1. Setup Tokenizer
-    # Usa un modello piccolo e veloce adatto per RAG multilingua/inglese
     try:
         tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
     except Exception as e:
@@ -29,12 +37,10 @@ def generate_markdown_chunks_from_string(
         return
 
     # 2. Setup Splitter specifico per Markdown
-    # RecursiveCharacterTextSplitter cerca di splittare prima sui doppi a capo (paragrafi),
-    # poi sui singoli a capo, poi spazi, ecc., preservando la struttura.
     text_splitter = RecursiveCharacterTextSplitter.from_huggingface_tokenizer(
         tokenizer,
-        chunk_size=2048,  # Dimensione target del chunk in token (o caratteri approssimati dal tokenizer)
-        chunk_overlap=200,  # Sovrapposizione per mantenere il contesto tra i chunk
+        chunk_size=chunk_size_tokens,
+        chunk_overlap=chunk_overlap_tokens,
         separators=["\n\n", "\n", " ", ""],
     )
 
@@ -44,17 +50,79 @@ def generate_markdown_chunks_from_string(
     # 4. Splitting
     chunks = text_splitter.split_documents([doc_object])
 
-    # 5. Preparazione Output JSON
-    chunks_data = []
+    # 5. Preparazione Output JSON con prev/focus/next
+    chunks_data: List[Dict[str, Any]] = []
+
     for i, chunk in enumerate(chunks):
-        chunks_data.append({
+        full_text = chunk.page_content or ""
+        full_text = full_text.strip()
+
+        if not full_text:
+            continue
+
+        # Tokenizziamo il testo del chunk
+        encoding = tokenizer(
+            full_text,
+            add_special_tokens=False,
+            return_attention_mask=False,
+            return_token_type_ids=False,
+        )
+        tokens = encoding["input_ids"]
+        num_tokens = len(tokens)
+
+        # Caso edge: chunk troppo corto per applicare overlap in modo sensato
+        # In questo caso tutto il testo va in "focus" e prev/next restano vuoti
+        if num_tokens <= 2 * chunk_overlap_tokens:
+            prev_tokens = []
+            next_tokens = []
+            focus_tokens = tokens
+        else:
+            # Chunk "interni": hanno overlap sia davanti che dietro
+            if i == 0:
+                # Primo chunk: non esiste realmente un "prev" (niente overlap verso prima)
+                prev_tokens = []
+                focus_tokens = tokens[:-chunk_overlap_tokens]
+                next_tokens = tokens[-chunk_overlap_tokens:]
+            elif i == len(chunks) - 1:
+                # Ultimo chunk: non esiste realmente un "next"
+                prev_tokens = tokens[:chunk_overlap_tokens]
+                focus_tokens = tokens[chunk_overlap_tokens:]
+                next_tokens = []
+            else:
+                # Chunk in mezzo: overlap davanti (prev) e dietro (next)
+                prev_tokens = tokens[:chunk_overlap_tokens]
+                focus_tokens = tokens[chunk_overlap_tokens:-chunk_overlap_tokens]
+                next_tokens = tokens[-chunk_overlap_tokens:]
+
+        # Decodifica delle varie parti
+        def decode_tokens(tok_list: List[int]) -> str:
+            if not tok_list:
+                return ""
+            return tokenizer.decode(tok_list, skip_special_tokens=True).strip()
+
+        prev_text = decode_tokens(prev_tokens)
+        focus_text = decode_tokens(focus_tokens)
+        next_text = decode_tokens(next_tokens)
+
+        # Safety: se per qualche motivo la focus è vuota, ripieghiamo sull'intero testo
+        if not focus_text:
+            focus_text = full_text
+            prev_text = ""
+            next_text = ""
+
+        chunk_record: Dict[str, Any] = {
             "id": i,
-            "text": chunk.page_content,
+            "prev": prev_text,
+            "focus": focus_text,
+            "next": next_text,
             "metadata": {
                 "source": source_name,
-                "chunk_size_chars": len(chunk.page_content)
-            }
-        })
+                # Grandezza del chunk originale (non splittato in prev/focus/next)
+                "chunk_size_chars": len(full_text),
+            },
+        }
+
+        chunks_data.append(chunk_record)
 
     # 6. Salvataggio su file
     out_path_obj = Path(output_path)
@@ -63,7 +131,7 @@ def generate_markdown_chunks_from_string(
     with open(out_path_obj, "w", encoding="utf-8") as f:
         json.dump(chunks_data, f, ensure_ascii=False, indent=2)
 
-    print(f"Generati {len(chunks_data)} chunk di alta qualità salvati in {output_path}")
+    print(f"Generati {len(chunks_data)} chunk (con prev/focus/next) salvati in {output_path}")
 
 
 def generate_docling_chunks(doc, output_path: Union[str, Path]):
