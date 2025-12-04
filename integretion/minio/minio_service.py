@@ -17,7 +17,7 @@ def get_client():
 
 
 
-async def upload_from_fastapi(file_path: str, collectionId: str, documentId: str, objectKey: str, minio_client: Minio):
+async def upload_(file_path: str, collectionId: str, documentId: str, objectKey: str, minio_client: Minio):
     if not os.path.exists(file_path):
         print(f"Errore: file '{file_path}' does not exist.")
         return

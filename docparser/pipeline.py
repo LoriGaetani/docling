@@ -1,6 +1,7 @@
 # pipeline.py
 
 import json
+import uuid
 from pathlib import Path
 from typing import List, Tuple, Optional, Set, Union
 from collections import Counter
@@ -232,7 +233,7 @@ def run_docling_parsing(
                     if hasattr(picture.image, "mimetype") and picture.image.mimetype:
                         image_format = picture.image.mimetype.split("/")[-1].lower()
 
-                    fname = f"picture_{i}.{image_format}"
+                    fname = f"{uuid.uuid4()}.{image_format}"
                     save_path = images_folder / fname
 
                     pil_image.save(save_path, format=image_format.upper())

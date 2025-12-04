@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import Optional
 
 
@@ -17,3 +18,7 @@ class ExtractionRequested:
     file_name: Optional[str] = None
     model_name: Optional[str] = None
     prompt: Optional[str] = None
+
+
+class KafkaTopics(str, Enum):
+    EXTRACTION_REQUESTED = "extraction-requested"
