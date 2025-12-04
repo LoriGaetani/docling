@@ -11,3 +11,4 @@ easyocr
 onnxruntime
 openai
 langchain
+minio

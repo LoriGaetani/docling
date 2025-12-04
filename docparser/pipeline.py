@@ -27,10 +27,8 @@ from docparser.utils import should_enable_ocr_for_file, merge_tables, generate_m
 #  Helpers: document-like detection
 # =========================================================
 
-#TODO test with different document formats
-#TODO test if the ocr is actually needed based on text layer presence
-
-
+# TODO test with different document formats
+# TODO test if the ocr is actually needed based on text layer presence
 
 
 # =========================================================
@@ -107,16 +105,22 @@ def run_docling_parsing(
     1. Conversione (PDF/Image -> Docling Doc)
     2. Export JSON grezzo
     3. Analisi Merge Tabelle
-    4. Generazione Markdown PULITO (nuova logica iterate_items)
-    5. Salvataggio immagini
+    4. Generazione Markdown PULITO (nuova logica iterate_items) con placeholder immagini
+    5. Salvataggio immagini su disco (fix percorsi Windows)
     6. Applicazione Merge Tabelle
-    7. Chunking (chiama modulo esterno)
+    7. Iniezione Link Immagini (fix posizionamento)
+    8. Salvataggio e Chunking
     """
 
-    print(f"Processing {file_path} with Docling...")
+    # 0. SETUP PERCORSI ASSOLUTI
+    run_dir = run_dir.resolve()
+    print(f"\n--- PROCESSING: {file_path} ---")
+    print(f"Output Directory: {run_dir}")
+
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Parsing
+    print(f"Running Docling conversion on {file_path}...")
     converter, ocr_enabled, ocr_engine_name = build_docling_converter(
         file_path=file_path,
         use_rapidocr=use_rapidocr,
@@ -128,46 +132,53 @@ def run_docling_parsing(
     doc_data = result.document.export_to_dict()
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(doc_data, f, indent=2, ensure_ascii=False)
-    print(f"Successfully saved parsed data to {json_path}")
+    print(f"Saved JSON data to {json_path}")
 
     # 3. Analisi Merge Tabelle
     merged_groups = merge_tables(result.document)
 
-    # 4. Generazione Markdown Pulito (NUOVA LOGICA iterate_items)
-    # Questa parte sostituisce la logica "clean_headers_footers" euristica vecchia
-    print("Generating Markdown filtering out page headers/footers (New Logic)...")
+    # 4. Generazione Markdown Pulito
+    print("Generating Markdown with visual sorting...")
     md_parts: List[str] = []
 
-    NOISY_HEADER_PATTERNS = [
-        "Comando Provinciale Carabinieri",
-        "Procedimento penale nr.9028/10 RGNR",
-        "Procura della Repubblica di Genova - DDA",
-        # Aggiungi qui altri pattern fissi da rimuovere
-    ]
-
+    # Lista di tutti gli elementi
+    all_items = []
     for item, level in result.document.iterate_items():
+        all_items.append((item, level))
+
+    # Funzione per estrarre la posizione (Pagina, Coordinata Y in alto)
+    def get_sort_key(entry):
+        item, _ = entry
+        if hasattr(item, "prov") and item.prov:
+            return (item.prov[0].page_no, item.prov[0].bbox.t)
+        return (0, 999999)
+
+    # Ordiniamo per posizione visiva
+    all_items.sort(key=get_sort_key)
+
+    # Placeholder per immagini in ordine di apparizione
+    image_placeholders: List[str] = []
+    image_index = 0
+
+    # Generazione Markdown in ordine visivo
+    for item, level in all_items:
         text = (getattr(item, "text", "") or "").strip()
 
-        # Filtro 1: Label Docling (Header/Footer pagina)
+        # Filtri (header/footer pagina)
         if item.label in (DocItemLabel.PAGE_HEADER, DocItemLabel.PAGE_FOOTER):
             continue
 
-        # Filtro 2: Pattern testuali specifici
-        if any(pat in text for pat in NOISY_HEADER_PATTERNS):
-            continue
-
-        # Costruzione Markdown in base al tipo
+        # Costruzione Markdown
         if item.label == DocItemLabel.SECTION_HEADER:
+            if len(text) < 3:
+                continue
             prefix = "#" * (level if level and level > 0 else 1)
-            if text:
-                md_parts.append(f"{prefix} {text}")
+            md_parts.append(f"{prefix} {text}")
 
         elif item.label == DocItemLabel.LIST_ITEM:
-            if text:
-                md_parts.append(f"* {text}")
+            md_parts.append(f"* {text}")
 
         elif item.label == DocItemLabel.TABLE:
-            # Qui inseriamo la versione base della tabella, poi verrà sostituita se fa parte di un merge
             if hasattr(item, "export_to_markdown"):
                 md_parts.append(item.export_to_markdown())
             else:
@@ -175,46 +186,61 @@ def run_docling_parsing(
                     md_parts.append(text)
 
         elif item.label == DocItemLabel.PICTURE:
+            # Mettiamo un placeholder unico che sostituiremo dopo con ![Image](path)
             if text:
                 md_parts.append(text)
-            # Placeholder per dopo
-            md_parts.append("<!-- image -->")
+            placeholder = f"[[[IMG_{image_index}]]]"
+            image_placeholders.append(placeholder)
+            md_parts.append(placeholder)
+            image_index += 1
 
         elif item.label == DocItemLabel.CODE:
             md_parts.append(f"```\n{text}\n```")
 
         else:
-            # Testo standard (paragrafi, didascalie, ecc.)
+            # Paragrafi standard
             if text:
                 md_parts.append(text)
 
-    # Uniamo il tutto
     cleaned_md = "\n\n".join(md_parts)
 
-    # 5. Salvataggio Immagini
+    # 5. Salvataggio Immagini CON FILTRO DIMENSIONI
     images_folder = run_dir / "images"
     images_folder.mkdir(parents=True, exist_ok=True)
     saved_image_paths: List[Union[str, None]] = []
 
     if hasattr(result.document, "pictures") and result.document.pictures:
-        print(f"Saving {len(result.document.pictures)} pictures to {images_folder}...")
+        print(f"Analyzing {len(result.document.pictures)} pictures...")
         for i, picture in enumerate(result.document.pictures):
             if (
-                    hasattr(picture, "image")
-                    and hasattr(picture.image, "pil_image")
-                    and picture.image.pil_image is not None
+                hasattr(picture, "image")
+                and hasattr(picture.image, "pil_image")
+                and picture.image.pil_image is not None
             ):
                 try:
                     pil_image = picture.image.pil_image
+                    width, height = pil_image.size
+
+                    # FILTRO ANTI-RUMORE (icone/linee troppo piccole)
+                    if width < 50 or height < 50:
+                        print(f"  Skipping small image {i} ({width}x{height})")
+                        saved_image_paths.append(None)
+                        continue
+
+                    # Gestione formato
                     image_format = "png"
                     if hasattr(picture.image, "mimetype") and picture.image.mimetype:
                         image_format = picture.image.mimetype.split("/")[-1].lower()
 
-                    picture_filename = f"picture_{i}.{image_format}"
-                    picture_path = images_folder / picture_filename
+                    fname = f"picture_{i}.{image_format}"
+                    save_path = images_folder / fname
 
-                    pil_image.save(picture_path, format=image_format.upper())
-                    saved_image_paths.append(str(picture_path.relative_to(run_dir)))
+                    pil_image.save(save_path, format=image_format.upper())
+
+                    # Path relativo con slash unix
+                    rel_path = str(save_path.relative_to(run_dir)).replace("\\", "/")
+                    saved_image_paths.append(rel_path)
+
                 except Exception as e:
                     print(f"  Could not save picture {i}: {e}")
                     saved_image_paths.append(None)
@@ -223,39 +249,42 @@ def run_docling_parsing(
     else:
         print("No pictures found in the document.")
 
-    # 6. Applicazione del Merge Tabelle sulla stringa pulita
+    # 6. Applicazione del Merge Tabelle
     final_md = generate_merged_markdown(result.document, cleaned_md, merged_groups)
 
-    # 7. Iniezione Link Immagini (Modifica final_md, che è ancora "pulito")
-    if saved_image_paths:
+    # 7. Iniezione Link Immagini CON SPAZIATURA
+    if saved_image_paths and image_placeholders:
         print("Injecting image links into Markdown...")
-        placeholder = ""
-        for img_path in saved_image_paths:
-            # ... (logica replace) ...
-            if img_path and placeholder in final_md:
-                final_md = final_md.replace(placeholder, f"![Image]({img_path})", 1)
-            elif not img_path and placeholder in final_md:
-                final_md = final_md.replace(placeholder, "", 1)
 
-    # 8. Creazione Header (SOLO per il file .md su disco)
+        # Usiamo zip per accoppiare placeholder e path nello stesso ordine
+        for placeholder, img_path in zip(image_placeholders, saved_image_paths):
+            if img_path:
+                final_md = final_md.replace(
+                    placeholder,
+                    f"\n\n![Image]({img_path})\n\n"
+                )
+            else:
+                # Se l'immagine è stata filtrata o è fallita, rimuoviamo il placeholder
+                final_md = final_md.replace(placeholder, "")
+
+    # 8. Creazione Header e Salvataggio Output
     header_info = (
         f"> Docling OCR engine: **{ocr_engine_name}** "
         f"(enabled: {ocr_enabled})\n\n"
         f"File: `{file_path}`\n\n"
         f"---\n\n"
     )
-    final_md_with_header = header_info + final_md  # <--- Versione "sporcam" per debug
+    final_md_with_header = header_info + final_md
 
-    # 9. Salvataggio Markdown (Salviamo quella con l'header)
     md_output_path = run_dir / "output.md"
     with open(md_output_path, "w", encoding="utf-8") as f:
         f.write(final_md_with_header)
     print(f"Successfully saved merged markdown to {md_output_path}")
 
-    # 10. Chunking (MODIFICA QUI: passiamo 'final_md', non 'final_md_with_header')
+    # 9. Chunking
     chunks_path = run_dir / "chunks.json"
     generate_markdown_chunks_from_string(
-        markdown_text=final_md,  # <--- Passa SOLO il contenuto pulito all'LLM
+        markdown_text=final_md,  # Passiamo il testo pulito (senza header tecnico)
         output_path=chunks_path,
         source_name="docling_clean_smart"
     )
