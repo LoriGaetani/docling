@@ -1,3 +1,11 @@
+
+for running:
+python cli.py dataset/file.pdf (if a folder is specified all the files inside are processed) --rapidocr (other options --openai, if not specified easyocr will be used) 
+
+
+
+
+
 # 📄 Docling PDF Processor
 
 Welcome to the **Docling PDF Processor**! This tool leverages the power of [Docling](https://github.com/DS4SD/docling) to seamlessly convert PDF documents into structured Markdown, handling complex elements like images and multi-page tables with ease. 🚀
@@ -41,7 +49,7 @@ PDFs often split large tables across multiple pages, breaking headers and struct
 1.  Place your target PDF file in the project root and name it `file.pdf` (or update the script to point to your file).
 2.  Run the script:
     ```bash
-    python app.py
+    python cli.py
     ```
 3.  **Check the output:**
     *   `output.md`: Your fully formatted Markdown file.
