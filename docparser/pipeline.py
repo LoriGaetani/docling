@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple, Optional, Set, Union
 from collections import Counter
@@ -24,9 +25,24 @@ from docparser.chunking import generate_markdown_chunks_from_string
 from docparser.utils import should_enable_ocr_for_file, merge_tables, generate_merged_markdown
 
 
-# =========================================================
-#  Helpers: document-like detection
-# =========================================================
+@dataclass
+class DoclingParseResult:
+    ocr_enabled: bool
+    ocr_engine_name: str
+
+    # contenuto
+    markdown: str  # markdown finale con header
+
+    # dove ha scritto le cose
+    run_dir: Path
+    json_path: Path           # output.json grezzo
+    markdown_path: Path       # output.md
+    chunks_path: Path         # chunks.json
+    images_dir: Optional[Path]
+
+    # info utili per le immagini (path relativi da usare nei link)
+    image_rel_paths: List[str]
+
 
 # TODO test with different document formats
 # TODO test if the ocr is actually needed based on text layer presence
@@ -100,7 +116,7 @@ def run_docling_parsing(
         file_path: str,
         run_dir: Path,
         use_rapidocr: bool = False,
-) -> tuple[bool, str, str]:
+) -> DoclingParseResult:
     """
     Esegue la pipeline Docling completa:
     1. Conversione (PDF/Image -> Docling Doc)
@@ -290,4 +306,27 @@ def run_docling_parsing(
         source_name="docling_clean_smart"
     )
 
-    return ocr_enabled, ocr_engine_name, final_md_with_header
+    # images_folder ce l'hai già definita sopra
+    images_dir: Optional[Path] = None
+    if hasattr(result.document, "pictures") and result.document.pictures:
+        if images_folder.exists():
+            images_dir = images_folder
+
+    # filtriamo i None da saved_image_paths, tenendo solo i path validi
+    image_rel_paths_clean = [p for p in saved_image_paths if p is not None]
+
+    # path del JSON grezzo (lo hai già)
+    json_path = run_dir / "output.json"
+
+    return DoclingParseResult(
+        ocr_enabled=ocr_enabled,
+        ocr_engine_name=ocr_engine_name,
+        markdown=final_md_with_header,
+        run_dir=run_dir,
+        json_path=json_path,
+        markdown_path=md_output_path,
+        chunks_path=chunks_path,
+        images_dir=images_dir,
+        image_rel_paths=image_rel_paths_clean,
+    )
+

@@ -7,23 +7,20 @@ from typing import List
 import torch
 import traceback
 
-# Import relativi interni alla libreria
-from .pipeline import run_docling_parsing
+from .pipeline import run_docling_parsing, DoclingParseResult
 from .reports.easyocr_report import run_easyocr_report_if_needed
 from .utils import is_supported_file
 
-
-# from .reports.openai import run_openai_ocr_report_if_needed # Decommenta se hai il file
 
 def process_document(
         file_path: str,
         output_root: str = "output",
         use_rapidocr: bool = False,
         use_openai: bool = False,
-) -> str:
+) -> DoclingParseResult:
     """
-    Funzione principale della libreria.
-    Restituisce il path della cartella di output creata.
+    Funzione principale della libreria per un singolo documento.
+    Restituisce un DoclingParseResult (con path e metadata).
     """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Error: {file_path} not found.")
@@ -39,7 +36,7 @@ def process_document(
 
     try:
         # 1) Docling Pipeline
-        ocr_enabled, ocr_engine_name, final_md = run_docling_parsing(
+        parse_result: DoclingParseResult = run_docling_parsing(
             file_path=file_path,
             run_dir=run_dir,
             use_rapidocr=use_rapidocr,
@@ -54,12 +51,13 @@ def process_document(
         else:
             run_easyocr_report_if_needed(
                 file_path=file_path,
-                ocr_enabled=ocr_enabled,
-                ocr_engine_name=ocr_engine_name,
-                run_dir=run_dir,
+                ocr_enabled=parse_result.ocr_enabled,
+                ocr_engine_name=parse_result.ocr_engine_name,
+                run_dir=parse_result.run_dir,
             )
 
-        return str(run_dir)
+        # Ritorniamo il risultato completo, non solo la cartella
+        return parse_result
 
     except Exception as e:
         print(f"An error occurred inside the library: {e}")
@@ -67,25 +65,24 @@ def process_document(
         raise e
 
 
-
 def process_batch_or_file(
         input_path: str,
         output_root: str = "output",
         use_rapidocr: bool = False,
         use_openai: bool = False,
-) -> List[str]:
+) -> List[DoclingParseResult]:
     """
-    Funzione Entry Point intelligente:
+    Entry point "intelligente":
     - Se input_path è un file: processa il file.
     - Se input_path è una cartella: processa tutti i file supportati all'interno.
 
-    Ritorna una lista dei path di output generati con successo.
+    Ritorna una lista di DoclingParseResult.
     """
     path_obj = Path(input_path)
-    successful_runs = []
+    successful_runs: List[DoclingParseResult] = []
 
     # 1. Identifica la lista dei file da processare
-    files_to_process = []
+    files_to_process: List[Path] = []
 
     if path_obj.is_file():
         if is_supported_file(path_obj):
@@ -96,7 +93,6 @@ def process_batch_or_file(
 
     elif path_obj.is_dir():
         print(f"Scanning folder: {input_path}...")
-        # Cerca tutti i file nella cartella (non ricorsivo, usa rglob('*') se vuoi sottocartelle)
         all_files = sorted(path_obj.iterdir())
         files_to_process = [p for p in all_files if p.is_file() and is_supported_file(p)]
 
@@ -114,19 +110,16 @@ def process_batch_or_file(
     for i, file_p in enumerate(files_to_process, start=1):
         print(f"\n--- Processing {i}/{len(files_to_process)}: {file_p.name} ---")
         try:
-            # Chiama la logica "core" del singolo file
-            result_dir = process_document(
+            parse_result = process_document(
                 file_path=str(file_p),
                 output_root=output_root,
                 use_rapidocr=use_rapidocr,
                 use_openai=use_openai
             )
-            successful_runs.append(result_dir)
+            successful_runs.append(parse_result)
 
         except Exception as e:
-            # Logghiamo l'errore ma NON fermiamo il ciclo per gli altri file
             print(f"[ERROR] Failed processing {file_p.name}: {e}")
-            # Opzionale: scrivere l'errore in un file di log nella root di output
             continue
 
     return successful_runs

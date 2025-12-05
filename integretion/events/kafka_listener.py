@@ -4,6 +4,11 @@ import logging
 import json
 from aiokafka import AIOKafkaConsumer
 
+from docparser.core import process_batch_or_file, process_document
+from integretion.minio.minio_service import download_document_from_minio, \
+    upload_parse_result_to_minio
+from integretion.models import ExtractionRequested
+
 
 # --- MOCKS/IMPORTS ---
 # Assuming these are imported from your actual project structure
@@ -49,28 +54,44 @@ class KafkaListener:
         try:
             # The 'async for' loop is the most efficient way to consume with aiokafka
             async for msg in self.consumer:
-                if not self.running: break
+                if not self.running:
+                    break
 
                 try:
                     logger.info(f"[{msg.topic}] offset:{msg.offset} --> Message received")
 
-                    # 1. Parse the data
-                    data_str = msg.value.decode('utf-8')
-                    # payload = json.loads(data_str) # Uncomment if payload is JSON
+                    # 1) Deserializza evento
+                    data = json.loads(msg.value)
+                    event = ExtractionRequested(**data)  # adatta al tuo modello
 
-                    # 2. Business Logic (e.g., Minio operations)
-                    # await self.process_data(data_str)
+                    # 2) Scarica il documento da MinIO su file locale
+                    local_file = await download_document_from_minio(event, self.minio_client)
+                    logger.info(f"File fetched from Minio and saved to: {local_file}")
 
-                    # 3. Manual Commit
-                    # Crucial: Since enable_auto_commit=False, we must commit manually.
-                    # We do this only if the logic above succeeded.
+                    # 3) Processa con la tua libreria (bloccante → meglio in thread)
+                    from docparser.core import process_batch_or_file
+
+                    parse_result = await asyncio.to_thread(
+                        process_document,
+                        str(local_file),  # file_path
+                        "output",  # output_root (o quello che vuoi)
+                        False,  # use_rapidocr
+                        False,  # use_openai
+                    )
+
+                    # 4) Carica su MinIO gli output (md, chunks, immagini)
+                    await upload_parse_result_to_minio(
+                        parse_result,
+                        event,
+                        self.minio_client,
+                    )
+
+                    # 5) Commit se tutto OK
                     await self.consumer.commit()
 
                 except Exception as e:
-                    # Catch processing errors so the consumer doesn't crash on one bad message
                     logger.error(f"Error processing message at offset {msg.offset}: {e}")
-                    # Strategy decision: Do you want to skip it? Or stop?
-                    # Currently, it logs the error and continues to the next message.
+
 
         except asyncio.CancelledError:
             logger.info("Task cancelled. Shutting down consumer loop...")

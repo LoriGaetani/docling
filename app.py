@@ -1,6 +1,7 @@
 import asyncio
 
 from integretion.events.kafka_listener import KafkaListener
+from integretion.minio.minio_service import get_client
 
 
 async def main():
@@ -8,13 +9,13 @@ async def main():
     Main orchestrator function.
     """
     # 1. Setup dependencies (Mocking Minio for this example)
-    minio_mock = "minio_client_instance"
+    minio = get_client()
 
     # 2. Instantiate the Listener
     listener = KafkaListener(
         bootstrap_servers="localhost:9092",
         group_id="my-group-v1",
-        minio_client=minio_mock
+        minio_client=minio
     )
 
     # 3. Start the listener
